@@ -1,0 +1,100 @@
+#include <WiFi.h>
+#include <WebServer.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include "DHT.h"
+
+// உங்க வைஃபை பெயர் மற்றும் பாஸ்வேர்ட்
+const char* ssid = "YOUR_WIFI_NAME";
+const char* password = "YOUR_WIFI_PASSWORD";
+
+#define DHTPIN 23          // DHT11 connected to GPIO 23
+#define DHTTYPE DHT11     
+DHT dht(DHTPIN, DHTTYPE);
+
+LiquidCrystal_I2C lcd(0x27, 16, 2); 
+WebServer server(80);
+
+int moisturePin = 34;   // Soil Moisture connected to GPIO 34 (Analog)
+int relayPin = 19;      // Relay IN1 connected to GPIO 19
+int moistureValue = 0;  
+int threshold = 2500;   // ESP32-க்கு தகுந்த த்ரெஷோல்ட் மதிப்பு (0-4095)
+
+void handleRoot() {
+  moistureValue = analogRead(moisturePin);
+  // ESP32 12-bit ADC என்பதால் 4095-ல் இருந்து மேப் செய்ய வேண்டும்
+  int moisturePercent = map(moistureValue, 4095, 0, 0, 100); 
+  if(moisturePercent < 0) moisturePercent = 0;
+  if(moisturePercent > 100) moisturePercent = 100;
+  
+  float temp = dht.readTemperature(); 
+  String motorStatus = (moistureValue > threshold) ? "ON (Watering...)" : "OFF (Soil is Wet)";
+
+  // மொபைல் பிரவுசருக்கான HTML டிசைன்
+  String html = "<html><head><meta http-equiv='refresh' content='2'><title>ESP32 Smart Irrigation</title></head>";
+  html += "<body style='font-family: Arial; text-align: center; background-color: #eef2f3;'>";
+  html += "<h2 style='color: #2c3e50;'>ESP32 Smart Irrigation Dashboard</h2>";
+  html += "<div style='font-size: 20px; margin: 20px;'>";
+  html += "<p><b>Soil Moisture: </b>" + String(moisturePercent) + "%</p>";
+  html += "<p><b>Temperature: </b>" + String(temp) + " C</p>";
+  html += "<p><b>Motor Status: </b><span style='color:blue; font-weight:bold;'>" + motorStatus + "</span></p>";
+  html += "</div></body></html>";
+  
+  server.send(200, "text/html", html);
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(relayPin, OUTPUT);
+  digitalWrite(relayPin, HIGH); // ஆரம்பத்தில் மோட்டார் ஆஃப்
+  
+  dht.begin();
+  
+  // ESP32-ல் I2C பின்கள் (SDA=21, SCL=22)
+  Wire.begin(21, 22); 
+  lcd.init();
+  lcd.backlight();
+  
+  // வைஃபை கனெக்ஷன்
+  WiFi.begin(ssid, password);
+  lcd.print("Connecting WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  
+  lcd.clear();
+  lcd.print("Connected!");
+  lcd.setCursor(0,1);
+  lcd.print(WiFi.localIP()); // எல்.சி.டி-யில் காட்டும் IP அட்ரஸ்
+  delay(3000);
+  lcd.clear();
+
+  server.on("/", handleRoot);
+  server.begin();
+}
+
+void loop() {
+  server.handleClient();
+  
+  moistureValue = analogRead(moisturePin);
+  int moisturePercent = map(moistureValue, 4095, 0, 0, 100);
+  if(moisturePercent < 0) moisturePercent = 0;
+  if(moisturePercent > 100) moisturePercent = 100;
+  
+  float temp = dht.readTemperature();
+
+  // LCD Update
+  lcd.setCursor(0, 0);
+  lcd.print("M:" + String(moisturePercent) + "% T:" + String((int)temp) + "C   ");
+  
+  // மோட்டார் கண்ட்ரோல்
+  if (moistureValue > threshold) {
+    digitalWrite(relayPin, LOW);  // Motor ON
+    lcd.setCursor(0, 1); lcd.print("Motor: ON       ");
+  } else {
+    digitalWrite(relayPin, HIGH); // Motor OFF
+    lcd.setCursor(0, 1); lcd.print("Motor: OFF      ");
+  }
+  delay(500);
+}
